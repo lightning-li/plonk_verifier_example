@@ -139,38 +139,40 @@ func main() {
 	}
 	vk.ExportSolidity(f)
 
-	var wit DemoCircuit
-	wit.X = 11
-	wit.Y = 121
-	witness, _ := frontend.NewWitness(&wit, ecc.BN254)
-	proof, err := plonk.Prove(oScs, pk, witness)
-	if err != nil {
-		panic(err)
-	}
-
-	var verifyWit DemoCircuit
-	verifyWit.Y = 121
-	verifyWitness, _ := frontend.NewWitness(&verifyWit, ecc.BN254, frontend.PublicOnly())
-	err = plonk.Verify(proof, vk, verifyWitness)
-	if err != nil {
-		fmt.Println("verify proof failed. err is ", err.Error())
-		return
-	} else {
-		fmt.Println("verify proof successfully")
-	}
-	fmt.Println("================================================")
-	fmt.Printf("public inputs: [%d]\n", verifyWit.Y)
-	formatProof, _ := FormatPlonkProof(proof)
-	var res []*big.Int
-	formatProof.ConvertToArray(&res)
-	fmt.Printf("serialize proof: [")
-	for i, r := range res {
-		if i != len(res) - 1 {
-			fmt.Printf("BigNumber.from(%q), ", r.String())
-		} else {
-			fmt.Printf("BigNumber.from(%q)", r.String())
+	for i := 11; i < 14; i++ {
+		var wit DemoCircuit
+		wit.X = i
+		wit.Y = i * i
+		witness, _ := frontend.NewWitness(&wit, ecc.BN254)
+		proof, err := plonk.Prove(oScs, pk, witness)
+		if err != nil {
+			panic(err)
 		}
+
+		var verifyWit DemoCircuit
+		verifyWit.Y = i * i
+		verifyWitness, _ := frontend.NewWitness(&verifyWit, ecc.BN254, frontend.PublicOnly())
+		err = plonk.Verify(proof, vk, verifyWitness)
+		if err != nil {
+			fmt.Println("verify proof failed. err is ", err.Error())
+			return
+		} else {
+			fmt.Println("verify proof successfully")
+		}
+		fmt.Println("================================================")
+		fmt.Printf("public inputs: [%d]\n", verifyWit.Y)
+		formatProof, _ := FormatPlonkProof(proof)
+		var res []*big.Int
+		formatProof.ConvertToArray(&res)
+		fmt.Printf("serialize proof: [")
+		for i, r := range res {
+			if i != len(res)-1 {
+				fmt.Printf("BigNumber.from(%q), ", r.String())
+			} else {
+				fmt.Printf("BigNumber.from(%q)", r.String())
+			}
+		}
+		fmt.Printf("]\n")
+		fmt.Println("================================================")
 	}
-	fmt.Printf("]\n")
-	fmt.Println("================================================")
 }

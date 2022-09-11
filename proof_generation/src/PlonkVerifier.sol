@@ -494,85 +494,6 @@ contract PlonkVerifier {
         return PairingsBn254.pairingProd2(pair_with_generator, PairingsBn254.P2(), pair_with_x, vk.g2_x);
     }
 
-    function get_pairing(
-        PartialVerifierState memory state,
-        Proof memory proof,
-        VerificationKey memory vk
-    ) internal view returns (PairingsBn254.G1Point memory part0, PairingsBn254.G1Point memory part1) {
-        PairingsBn254.G1Point memory d = reconstruct_d(state, proof, vk);
-        PairingsBn254.Fr memory zeta_in_domain_size = state.zeta.pow(vk.domain_size);
-
-        PairingsBn254.G1Point memory tmp_g1 = PairingsBn254.P1();
-
-        PairingsBn254.Fr memory aggregation_challenge = PairingsBn254.new_fr(1);
-
-        PairingsBn254.G1Point memory commitment_aggregation = PairingsBn254.copy_g1(state.cached_fold_quotient_ploy_commitments);
-        PairingsBn254.Fr memory tmp_fr = PairingsBn254.new_fr(1);
-
-        aggregation_challenge.mul_assign(state.v);
-        commitment_aggregation.point_add_assign(d);
-
-        for (uint i = 0; i < proof.wire_commitments.length; i++) {
-            aggregation_challenge.mul_assign(state.v);
-            tmp_g1 = proof.wire_commitments[i].point_mul(aggregation_challenge);
-            commitment_aggregation.point_add_assign(tmp_g1);
-        }
-
-        for (uint i = 0; i < vk.permutation_commitments.length - 1; i++) {
-            aggregation_challenge.mul_assign(state.v);
-            tmp_g1 = vk.permutation_commitments[i].point_mul(aggregation_challenge);
-            commitment_aggregation.point_add_assign(tmp_g1);
-        }
-
-        // collect opening values
-        aggregation_challenge = PairingsBn254.new_fr(1);
-
-        PairingsBn254.Fr memory aggregated_value = PairingsBn254.copy(proof.quotient_polynomial_at_zeta);
-
-        aggregation_challenge.mul_assign(state.v);
-
-        tmp_fr.assign(proof.linearization_polynomial_at_zeta);
-        tmp_fr.mul_assign(aggregation_challenge);
-        aggregated_value.add_assign(tmp_fr);
-
-        for (uint i = 0; i < proof.wire_values_at_zeta.length; i++) {
-            aggregation_challenge.mul_assign(state.v);
-
-            tmp_fr.assign(proof.wire_values_at_zeta[i]);
-            tmp_fr.mul_assign(aggregation_challenge);
-            aggregated_value.add_assign(tmp_fr);
-        }
-
-        for (uint i = 0; i < proof.permutation_polynomials_at_zeta.length; i++) {
-            aggregation_challenge.mul_assign(state.v);
-
-            tmp_fr.assign(proof.permutation_polynomials_at_zeta[i]);
-            tmp_fr.mul_assign(aggregation_challenge);
-            aggregated_value.add_assign(tmp_fr);
-        }
-        tmp_fr.assign(proof.grand_product_at_zeta_omega);
-        tmp_fr.mul_assign(state.u);
-        aggregated_value.add_assign(tmp_fr);
-
-        commitment_aggregation.point_sub_assign(PairingsBn254.P1().point_mul(aggregated_value));
-
-        PairingsBn254.G1Point memory pair_with_generator = commitment_aggregation;
-        pair_with_generator.point_add_assign(proof.opening_at_zeta_proof.point_mul(state.zeta));
-
-        tmp_fr.assign(state.zeta);
-        tmp_fr.mul_assign(vk.omega);
-        tmp_fr.mul_assign(state.u);
-        pair_with_generator.point_add_assign(proof.opening_at_zeta_omega_proof.point_mul(tmp_fr));
-
-        PairingsBn254.G1Point memory pair_with_x = proof.opening_at_zeta_omega_proof.point_mul(state.u);
-        pair_with_x.point_add_assign(proof.opening_at_zeta_proof);
-        pair_with_x.negate();
-
-        part0 = pair_with_generator;
-        part1 = pair_with_x;
-        return (part0, part1);
-    }
-
     function reconstruct_d(
         PartialVerifierState memory state,
         Proof memory proof,
@@ -825,39 +746,6 @@ contract PlonkVerifier {
         
         return valid;
     }
-
-    function batch_verify(Proof[] memory proofs, VerificationKey[] memory vks) internal view returns (bool) {
-
-        PairingsBn254.G1Point[] memory pair_points = new PairingsBn254.G1Point[](2*proofs.length);
-        TranscriptLibrary.Transcript memory transcript = TranscriptLibrary.new_transcript();
-        transcript.set_challenge_name("random");
-        for (uint i = 0; i < proofs.length; i++) {
-            PartialVerifierState memory state;
-            bool valid = verify_initial(state, proofs[i], vks[i]);
-            if (valid == false) {
-                return false;
-            }
-            (pair_points[2*i+0], pair_points[2*i+1]) = get_pairing(state, proofs[i], vks[i]);
-            transcript.update_with_fr(state.u);
-        }
-
-        PairingsBn254.Fr memory r = transcript.get_challenge();
-
-        PairingsBn254.G1Point memory pair_with_generator = PairingsBn254.copy_g1(pair_points[0]);
-        PairingsBn254.G1Point memory pair_with_x = PairingsBn254.copy_g1(pair_points[1]);
-
-        PairingsBn254.Fr memory challenge = PairingsBn254.new_fr(r.value);
-        for (uint i = 1; i < proofs.length; i++) {
-            pair_points[2*i].point_mul_assign(challenge);
-            pair_with_generator.point_add_assign(pair_points[2*i]);
-
-            pair_points[2*i+1].point_mul_assign(challenge);
-            pair_with_x.point_add_assign(pair_points[2*i+1]);
-            challenge.mul_assign(r);
-        }
-        bool valid = PairingsBn254.pairingProd2(pair_with_generator, PairingsBn254.P2(), pair_with_x, vks[0].g2_x);
-        return valid;
-    }
 }
 
 contract KeyedPlonkVerifier is PlonkVerifier {
@@ -868,59 +756,60 @@ contract KeyedPlonkVerifier is PlonkVerifier {
         vk.num_inputs = 1;
         vk.omega = PairingsBn254.new_fr(uint256(21888242871839275217838484774961031246007050428528088939761107053157389710902));
         vk.selector_commitments[0] = PairingsBn254.new_g1(
-            uint256(885647263582028904842095566738197561928194941821062680961172244100004467323),
-            uint256(11701767569195734345750926835120661807292218111206932954480433780849997756662)
+        	uint256(885647263582028904842095566738197561928194941821062680961172244100004467323),
+        	uint256(11701767569195734345750926835120661807292218111206932954480433780849997756662)
         );
         vk.selector_commitments[1] = PairingsBn254.new_g1(
-            uint256(8207418216529966474516092889670659522360518601951829100340102340545867083161),
-            uint256(9607018611054202804111976558454767651115068745197130451410912959699681181105)
+			uint256(8207418216529966474516092889670659522360518601951829100340102340545867083161),
+			uint256(9607018611054202804111976558454767651115068745197130451410912959699681181105)
         );
         vk.selector_commitments[2] = PairingsBn254.new_g1(
-            uint256(13461870697417777727605951262241267408776150455957854709977991311091465968230),
-            uint256(18954047907966136406804714796864207794632108630311775408970960882120664272458)
+			uint256(13461870697417777727605951262241267408776150455957854709977991311091465968230),
+			uint256(18954047907966136406804714796864207794632108630311775408970960882120664272458)
         );
         vk.selector_commitments[3] = PairingsBn254.new_g1(
-            uint256(13461870697417777727605951262241267408776150455957854709977991311091465968230),
-            uint256(2934194963873138815441690948393067294064202526986048253718077012524561936125)
+			uint256(13461870697417777727605951262241267408776150455957854709977991311091465968230),
+			uint256(2934194963873138815441690948393067294064202526986048253718077012524561936125)
         );
         vk.selector_commitments[4] = PairingsBn254.new_g1(
-            uint256(0),
-            uint256(0)
+			uint256(0),
+			uint256(0)
         );
 
         vk.permutation_commitments[0] = PairingsBn254.new_g1(
-            uint256(5008589793534087045598211794884212192366485501668800298461838042455597148922),
-            uint256(10896458444689009594560856850356987339239850799293889034019891518837349001545)
+        	uint256(5008589793534087045598211794884212192366485501668800298461838042455597148922),
+			uint256(10896458444689009594560856850356987339239850799293889034019891518837349001545)
         );
         vk.permutation_commitments[1] = PairingsBn254.new_g1(
-            uint256(6535599766987448166567461918403333138110878088725972758995481735146475976207),
-            uint256(11624919969571072081884239576550645518314058022631451693072600066137522676690)
+			uint256(6535599766987448166567461918403333138110878088725972758995481735146475976207),
+			uint256(11624919969571072081884239576550645518314058022631451693072600066137522676690)
         );
         vk.permutation_commitments[2] = PairingsBn254.new_g1(
-            uint256(12238744201589713941417533050408479447608009788658467070749472243911391978348),
-            uint256(1406115227148722760305357104250199722575491764491950236842219752494199047122)
+			uint256(12238744201589713941417533050408479447608009788658467070749472243911391978348),
+			uint256(1406115227148722760305357104250199722575491764491950236842219752494199047122)
         );
 
         vk.permutation_non_residues[0] = PairingsBn254.new_fr(
-            uint256(5)
+        	uint256(5)
         );
         vk.permutation_non_residues[1] = PairingsBn254.copy(
-            vk.permutation_non_residues[0]
+			vk.permutation_non_residues[0]
         );
-        vk.permutation_non_residues[1].mul_assign(vk.permutation_non_residues[0]);
+		vk.permutation_non_residues[1].mul_assign(vk.permutation_non_residues[0]);
 
         vk.g2_x = PairingsBn254.new_g2(
-            [uint256(1194667737578097409619745922052343237148902074028507102688406350967472290754),
-            uint256(9078388061670987007698016565609601055202384941126376759304273751333308509225)],
-            [uint256(15061795607613069163549985111112390929020811952001307576638881982903175446285),
-            uint256(8994915731419353349937169788949707994295804849988821304574549163296470132703)]
+			[uint256(1194667737578097409619745922052343237148902074028507102688406350967472290754),
+			uint256(9078388061670987007698016565609601055202384941126376759304273751333308509225)],
+			[uint256(15061795607613069163549985111112390929020811952001307576638881982903175446285),
+			uint256(8994915731419353349937169788949707994295804849988821304574549163296470132703)]
         );
     }
+
 
     function deserialize_proof(
         uint256[] memory public_inputs,
         uint256[] memory serialized_proof
-    ) internal view returns(Proof memory proof) {
+    ) internal pure returns(Proof memory proof) {
         require(serialized_proof.length == SERIALIZED_PROOF_LENGTH);
         proof.input_values = new uint256[](public_inputs.length);
         for (uint256 i = 0; i < public_inputs.length; i++) {
@@ -1007,54 +896,5 @@ contract KeyedPlonkVerifier is PlonkVerifier {
         Proof memory proof = deserialize_proof(public_inputs, serialized_proof);
         bool valid = verify(proof, vk);
         return valid;
-    }
-
-    function batch_verify_serialized_proof(
-        uint256[] memory public_inputs,
-        uint256[] memory serialized_proofs,
-        uint256 proof_number
-    ) public  returns (bool) {
-        Proof[] memory proofs = new Proof[](proof_number);
-        VerificationKey[] memory vks = new VerificationKey[](proof_number);
-        for (uint256 i = 0; i < proof_number; i++) {
-            uint256[] memory public_input = new uint256[](1);
-            uint256[] memory serialized_proof = new uint256[](SERIALIZED_PROOF_LENGTH);
-            for (uint j = 0; j < 1; j++) {
-                public_input[j] = public_inputs[i+j];
-            }
-            for (uint j = 0; j < SERIALIZED_PROOF_LENGTH; j++) {
-                serialized_proof[j] = serialized_proofs[i*SERIALIZED_PROOF_LENGTH+j];
-            }
-            proofs[i] = deserialize_proof(public_input, serialized_proof);
-            vks[i] = get_verification_key();
-        }
-        bool valid = batch_verify(proofs, vks);
-        return valid;
-    }
-    function batch_verify_serialized_proof2(
-        uint256[] memory public_inputs,
-        uint256[] memory serialized_proofs,
-        uint256 proof_number
-    ) public  returns (bool) {
-        Proof[] memory proofs = new Proof[](proof_number);
-        VerificationKey[] memory vks = new VerificationKey[](proof_number);
-        for (uint256 i = 0; i < proof_number; i++) {
-            uint256[] memory public_input = new uint256[](1);
-            uint256[] memory serialized_proof = new uint256[](SERIALIZED_PROOF_LENGTH);
-            for (uint j = 0; j < 1; j++) {
-                public_input[j] = public_inputs[i+j];
-            }
-            for (uint j = 0; j < SERIALIZED_PROOF_LENGTH; j++) {
-                serialized_proof[j] = serialized_proofs[i*SERIALIZED_PROOF_LENGTH+j];
-            }
-            proofs[i] = deserialize_proof(public_input, serialized_proof);
-            vks[i] = get_verification_key();
-            bool valid = verify(proofs[i], vks[i]);
-            if (!valid) {
-                return false;
-            }
-        }
-
-        return true;
     }
 }
